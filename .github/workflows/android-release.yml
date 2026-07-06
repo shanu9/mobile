@@ -1,0 +1,80 @@
+name: Build Android APK
+
+# Builds the AgentScribe Android APK (a thin Capacitor shell that loads the
+# hosted web app, same strategy as the Electron desktop build) and attaches it
+# to a GitHub Release — so the website's download page can link to it.
+#
+# Trigger: push a tag `v*` (git tag v0.1.0 && git push --tags) or run manually
+# from the Actions tab. Produces an UNSIGNED debug APK (installable via
+# "Install unknown apps"), matching the unsigned Windows installer for now; a
+# signed Play Store build comes later with the $25 Google Play account.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Add Android platform
+        run: npx cap add android
+
+      - name: Add mic + audio permissions to the manifest
+        run: |
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+          # Insert the recording permissions before <application ...>. Foreground
+          # recording needs RECORD_AUDIO; the others are standard media perms.
+          perl -0pi -e 's#(\s*)<application#\1<uses-permission android:name="android.permission.RECORD_AUDIO" />\1<uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />\1<application#' "$MANIFEST"
+          echo "----- manifest permissions -----"
+          grep "uses-permission" "$MANIFEST" || true
+
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      - name: Build debug APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Collect APK
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk AgentScribe.apk
+          ls -lh AgentScribe.apk
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: AgentScribe.apk
+          # Fixed tag so the website's releases/latest/download/AgentScribe.apk
+          # link always resolves; each build refreshes this release.
+          tag_name: android-latest
+          name: AgentScribe Android
+          draft: false
+          make_latest: true
+          body: |
+            AgentScribe Android APK (unsigned debug build).
+            Install: download, then allow "Install unknown apps" for your browser.
