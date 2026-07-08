@@ -42,14 +42,23 @@ jobs:
       - name: Add Android platform
         run: npx cap add android
 
-      - name: Add mic + audio permissions to the manifest
+      - name: Add mic + foreground-service permissions and service type
         run: |
           MANIFEST=android/app/src/main/AndroidManifest.xml
-          # Insert the recording permissions before <application ...>. Foreground
-          # recording needs RECORD_AUDIO; the others are standard media perms.
-          perl -0pi -e 's#(\s*)<application#\1<uses-permission android:name="android.permission.RECORD_AUDIO" />\1<uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />\1<application#' "$MANIFEST"
-          echo "----- manifest permissions -----"
-          grep "uses-permission" "$MANIFEST" || true
+          # Recording + background-audio permissions. RECORD_AUDIO drives the mic;
+          # FOREGROUND_SERVICE(_MICROPHONE) + POST_NOTIFICATIONS + WAKE_LOCK let a
+          # microphone foreground service keep capture alive when the screen locks
+          # or the user switches to their meeting app.
+          perl -0pi -e 's#(\s*)<application#\1<uses-permission android:name="android.permission.RECORD_AUDIO" />\1<uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />\1<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\1<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />\1<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\1<uses-permission android:name="android.permission.WAKE_LOCK" />\1<application#' "$MANIFEST"
+          # Android 14+ (targetSdk 34) requires a TYPED foreground service. The
+          # capawesome plugin declares its service with no type, so merge the
+          # microphone type onto it. NOTE: this manifest-merge is the part to
+          # verify on a real Android 14 device — if record-start crashes, this is
+          # where to iterate.
+          perl -0pi -e 's#<manifest (?![^>]*xmlns:tools)#<manifest xmlns:tools="http://schemas.android.com/tools" #' "$MANIFEST"
+          perl -0pi -e 's#(\s*)(</application>)#\1  <service android:name="io.capawesome.capacitorjs.plugins.foregroundservice.AndroidForegroundService" android:foregroundServiceType="microphone" tools:node="merge" />\1\2#' "$MANIFEST"
+          echo "----- manifest (perms + fgs type) -----"
+          grep -E "uses-permission|foregroundServiceType|xmlns:tools" "$MANIFEST" || true
 
       - name: Sync Capacitor
         run: npx cap sync android
